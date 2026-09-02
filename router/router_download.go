@@ -42,13 +42,13 @@ func getDownloadBackup(c *gin.Context) {
 		return
 	}
 
-	// Locate the backup on the local disk.
+	// Locate the backup on the local disk. S3 downloads never reach this
+	// endpoint, the panel presigns those directly, so a miss here means either
+	// a borg backup or one that really does not exist.
 	b, st, err := backup.LocateLocal(client, token.BackupUuid)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			c.AbortWithStatusJSON(http.StatusNotFound, gin.H{
-				"error": "The requested backup was not found on this server.",
-			})
+			getDownloadBackupBorg(c, client, token.BackupUuid)
 			return
 		}
 

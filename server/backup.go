@@ -106,7 +106,7 @@ func (s *Server) Backup(b backup.BackupInterface) error {
 		"uuid":          b.Identifier(),
 		"is_successful": true,
 		"checksum":      ad.Checksum,
-		"checksum_type": "sha1",
+		"checksum_type": ad.ChecksumType,
 		"file_size":     ad.Size,
 	})
 

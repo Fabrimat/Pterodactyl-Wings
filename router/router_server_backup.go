@@ -3,6 +3,7 @@ package router
 import (
 	"context"
 	stderrors "errors"
+	"io"
 	"mime"
 	"net"
 	"net/http"
@@ -18,6 +19,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/pterodactyl/wings/config"
+	"github.com/pterodactyl/wings/remote"
 	"github.com/pterodactyl/wings/router/middleware"
 	"github.com/pterodactyl/wings/server"
 	"github.com/pterodactyl/wings/server/backup"
@@ -41,9 +43,10 @@ func postServerBackup(c *gin.Context) {
 	client := middleware.ExtractApiClient(c)
 	logger := middleware.ExtractLogger(c)
 	var data struct {
-		Adapter backup.AdapterType `json:"adapter"`
-		Uuid    string             `json:"uuid"`
-		Ignore  string             `json:"ignore"`
+		Adapter backup.AdapterType        `json:"adapter"`
+		Uuid    string                    `json:"uuid"`
+		Ignore  string                    `json:"ignore"`
+		Borg    *remote.BorgConfiguration `json:"borg"`
 	}
 	if err := c.BindJSON(&data); err != nil {
 		return
@@ -59,6 +62,11 @@ func postServerBackup(c *gin.Context) {
 		adapter = backup.NewLocal(client, backupUuid, data.Ignore)
 	case backup.S3BackupAdapter:
 		adapter = backup.NewS3(client, backupUuid, data.Ignore)
+	case backup.BorgBackupAdapter:
+		if !requireBorgConfiguration(c, data.Borg) {
+			return
+		}
+		adapter = backup.NewBorg(client, backupUuid, data.Ignore, data.Borg)
 	default:
 		middleware.CaptureAndAbort(c, errors.New("router/backups: provided adapter is not valid: "+string(data.Adapter)))
 		return
@@ -95,11 +103,13 @@ func postServerRestoreBackup(c *gin.Context) {
 	logger := middleware.ExtractLogger(c)
 
 	var data struct {
-		Adapter           backup.AdapterType `binding:"required,oneof=wings s3" json:"adapter"`
+		Adapter           backup.AdapterType `binding:"required,oneof=wings s3 borg" json:"adapter"`
 		TruncateDirectory bool               `json:"truncate_directory"`
 		// A UUID is always required for this endpoint, however the download URL
 		// is only present when the given adapter type is s3.
 		DownloadUrl string `json:"download_url"`
+		// Only present when the given adapter type is borg.
+		Borg *remote.BorgConfiguration `json:"borg"`
 	}
 	if err := c.BindJSON(&data); err != nil {
 		return
@@ -115,6 +125,19 @@ func postServerRestoreBackup(c *gin.Context) {
 	if data.Adapter == backup.S3BackupAdapter {
 		if err := validateBackupDownloadUrl(data.DownloadUrl); err != nil {
 			c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+	}
+
+	// For a borg restore, confirm the archive actually exists before anything
+	// below this point deletes a single file. A lock timeout, an unreachable
+	// repository or a wrong passphrase must fail the request rather than empty
+	// the server out for a restore that was never going to succeed.
+	var borgBackup *backup.BorgBackup
+	if data.Adapter == backup.BorgBackupAdapter {
+		var ok bool
+		borgBackup, ok = probeBorgRestoreArchive(c, client, backupUuid, data.Borg)
+		if !ok {
 			return
 		}
 	}
@@ -156,6 +179,13 @@ func postServerRestoreBackup(c *gin.Context) {
 			logger.Info("completed server restoration from local backup")
 			s.SetRestoring(false)
 		}(s, b, logger)
+		hasError = false
+		c.Status(http.StatusAccepted)
+		return
+	}
+
+	if data.Adapter == backup.BorgBackupAdapter {
+		restoreServerBackupBorg(s, borgBackup, logger)
 		hasError = false
 		c.Status(http.StatusAccepted)
 		return
@@ -224,7 +254,26 @@ func deleteServerBackup(c *gin.Context) {
 	if !ok {
 		return
 	}
-	b, _, err := backup.LocateLocal(middleware.ExtractApiClient(c), backupUuid)
+
+	// This request historically carries no body at all, so an empty one has to
+	// keep working exactly as before. Only a borg delete adds a body, so bind
+	// it optionally and only treat a genuine parse failure as an error.
+	var data struct {
+		Borg *remote.BorgConfiguration `json:"borg"`
+	}
+	if err := c.ShouldBindJSON(&data); err != nil && !stderrors.Is(err, io.EOF) {
+		middleware.CaptureAndAbort(c, err)
+		return
+	}
+	client := middleware.ExtractApiClient(c)
+	if data.Borg != nil {
+		// A borg backup has no local file, so this has to run before
+		// backup.LocateLocal below, which would otherwise just 404 on it.
+		deleteServerBackupBorg(c, client, backupUuid, data.Borg, middleware.ExtractLogger(c))
+		return
+	}
+
+	b, _, err := backup.LocateLocal(client, backupUuid)
 	if err != nil {
 		// Just return from the function at this point if the backup was not located.
 		if errors.Is(err, os.ErrNotExist) {
