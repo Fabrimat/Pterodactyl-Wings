@@ -28,8 +28,27 @@ func TestRequireBorgConfiguration(t *testing.T) {
 
 	w2 := httptest.NewRecorder()
 	c2, _ := gin.CreateTestContext(w2)
-	if !requireBorgConfiguration(c2, &remote.BorgConfiguration{}) {
-		t.Fatal("expected a present borg configuration to be accepted")
+	backupID := "11111111-1111-1111-1111-111111111111"
+	if !requireBorgConfiguration(c2, &remote.BorgConfiguration{Repository: "/srv/borg/server", Archive: backupID}) {
+		t.Fatal("expected a complete borg configuration to be accepted")
+	}
+
+	w3 := httptest.NewRecorder()
+	c3, _ := gin.CreateTestContext(w3)
+	if requireBorgConfiguration(c3, &remote.BorgConfiguration{Archive: backupID}) {
+		t.Fatal("expected a borg configuration with no repository to be rejected")
+	}
+	if c3.Writer.Status() != http.StatusBadRequest {
+		t.Fatalf("expected status %d for a borg configuration with no repository, got %d", http.StatusBadRequest, c3.Writer.Status())
+	}
+
+	w4 := httptest.NewRecorder()
+	c4, _ := gin.CreateTestContext(w4)
+	if requireBorgConfiguration(c4, &remote.BorgConfiguration{Repository: "/srv/borg/server"}) {
+		t.Fatal("expected a borg configuration with no archive to be rejected")
+	}
+	if c4.Writer.Status() != http.StatusBadRequest {
+		t.Fatalf("expected status %d for a borg configuration with no archive, got %d", http.StatusBadRequest, c4.Writer.Status())
 	}
 }
 
