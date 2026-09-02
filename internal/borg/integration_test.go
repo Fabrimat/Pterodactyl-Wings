@@ -21,6 +21,7 @@ import (
 	"bytes"
 	"context"
 	"io"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"testing"
@@ -360,5 +361,102 @@ func TestBorgRejectsAWrongPassphrase(t *testing.T) {
 	// looking for damage that is not there.
 	if IsNotFoundError(err) {
 		t.Errorf("IsNotFoundError() = true for a wrong passphrase: %v", err)
+	}
+}
+
+// TestBorgDistinguishesAHalfWrittenRepository pins the difference the borg
+// adapter's init path depends on. borg answers a complete repository with "A
+// repository already exists at <path>", which IsRepositoryExistsError matches
+// so the loser of a race between two backups of one server can treat it as a
+// success. It answers a directory holding a half written layout with "There is
+// already something at <path>", which that predicate deliberately does not
+// match: tolerating it would mean carrying on as though a usable repository
+// were there. Measured against borg 1.2.8. If a release moves either message
+// across the line, this fails instead of a backup quietly changing meaning.
+func TestBorgDistinguishesAHalfWrittenRepository(t *testing.T) {
+	if _, err := exec.LookPath("borg"); err != nil {
+		t.Skip("borg is not installed on this machine; skipping the real borg integration test")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+
+	root := t.TempDir()
+	base := t.TempDir()
+	common := CommonOptions{LockWait: 30}
+	pass := Secret("borg integration test passphrase")
+	initOf := func(path string) Cmd {
+		return Cmd{
+			Sub:           "init",
+			Common:        common,
+			Options:       []string{"--encryption", "repokey-blake2"},
+			Positionals:   []string{path},
+			NewPassphrase: true,
+		}
+	}
+
+	// A complete repository is tolerated: the concurrent backup that lost the
+	// race still has a repository to write into.
+	good := filepath.Join(base, "good")
+	gr := NewRunner(root, Repository{Path: good, Passphrase: pass})
+	if _, err := gr.Run(ctx, initOf(good)); err != nil {
+		t.Fatalf("init: %v", err)
+	}
+	if _, err := gr.Run(ctx, initOf(good)); err == nil {
+		t.Error("re-init of a complete repository succeeded, want it refused")
+	} else if !IsRepositoryExistsError(err) {
+		t.Errorf("re-init of a complete repository: err = %v, want IsRepositoryExistsError", err)
+	}
+
+	// A directory holding a partial layout, which is what an init killed part
+	// way through leaves behind. Not tolerated.
+	partial := filepath.Join(base, "partial")
+	if err := os.MkdirAll(filepath.Join(partial, "data"), 0o700); err != nil {
+		t.Fatalf("could not stage the partial repository: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(partial, "config"), []byte("[repository]\nversion = 1\n"), 0o600); err != nil {
+		t.Fatalf("could not stage the partial repository: %v", err)
+	}
+	pr := NewRunner(root, Repository{Path: partial, Passphrase: pass})
+	if _, err := pr.Run(ctx, initOf(partial)); err == nil {
+		t.Error("init over a half written repository succeeded, want it refused")
+	} else if IsRepositoryExistsError(err) {
+		t.Errorf("IsRepositoryExistsError() = true for a half written repository: %v", err)
+	}
+
+	// Both shapes IsNotFoundError has to cover, so that deleting an archive
+	// whose repository is gone is the outcome the caller wanted. The first is
+	// borg's "does not exist", the second its "is not a valid repository".
+	info := func(path string) Cmd {
+		return Cmd{Sub: "info", Common: common, Options: []string{"--json"}, Positionals: []string{path}}
+	}
+	missing := filepath.Join(base, "missing")
+	mr := NewRunner(root, Repository{Path: missing, Passphrase: pass})
+	if _, err := mr.Run(ctx, info(missing)); err == nil {
+		t.Error("info on a missing repository succeeded, want it refused")
+	} else if !IsNotFoundError(err) {
+		t.Errorf("info on a missing repository: err = %v, want IsNotFoundError", err)
+	}
+	empty := filepath.Join(base, "empty")
+	if err := os.MkdirAll(empty, 0o700); err != nil {
+		t.Fatalf("could not stage the empty directory: %v", err)
+	}
+	er := NewRunner(root, Repository{Path: empty, Passphrase: pass})
+	if _, err := er.Run(ctx, info(empty)); err == nil {
+		t.Error("info on an empty directory succeeded, want it refused")
+	} else if !IsNotFoundError(err) {
+		t.Errorf("info on an empty directory: err = %v, want IsNotFoundError to cover borg's invalid repository message", err)
+	}
+
+	// The half written repository is the opposite case and must not be
+	// mistaken for an absent one. Its config parses far enough that borg gets
+	// past the "not a valid repository" check and dies inside itself, on a
+	// stderr that matches no predicate here. That is the outcome to keep:
+	// treating it as not found would let a delete report success against a
+	// repository that is damaged rather than gone.
+	if _, err := pr.Run(ctx, info(partial)); err == nil {
+		t.Error("info on a half written repository succeeded, want it refused")
+	} else if IsNotFoundError(err) {
+		t.Errorf("IsNotFoundError() = true for a damaged repository: %v", err)
 	}
 }

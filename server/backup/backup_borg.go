@@ -399,15 +399,17 @@ func (b *BorgBackup) ensureRepository(ctx context.Context) error {
 		if !borg.IsRepositoryExistsError(err) {
 			return errors.WrapIf(err, "backup: failed to initialize the borg repository")
 		}
-		// An interrupted init can leave a directory behind that exists without
-		// holding a usable repository. That reports "already exists" here and
-		// then fails every archive afterwards for no visible reason, so check
-		// again and say what is actually wrong.
+		// borg says a repository is already there while the probe above could
+		// not open it, so the two disagree and something is wrong with the
+		// repository itself rather than with its absence. A wrong passphrase
+		// is not what lands here: the probe above already named that, and the
+		// only race that reaches this point is a second backup of the same
+		// server, which derives the same passphrase. Interrupted init is not
+		// what lands here either - borg answers "There is already something
+		// at <path>" for a half written directory, which the check above
+		// treats as a plain init failure and reports with borg's own words.
 		if perr := b.openRepository(ctx); perr != nil {
-			if borg.IsPassphraseError(perr) {
-				return errors.WrapIf(perr, "backup: the borg repository exists but the passphrase does not open it, which is what a changed backup passphrase secret looks like from the node")
-			}
-			return errors.New("backup: the borg repository path exists but is not a usable borg repository")
+			return errors.WrapIf(perr, "backup: borg reports a repository at this path that cannot be opened")
 		}
 	}
 	return nil
