@@ -190,6 +190,11 @@ func cleanRoot(root string) (string, error) {
 // function that removes it again. The cleanup function is always safe to call.
 func (r *Runner) sshEnvironment() (string, func(), error) {
 	noop := func() {}
+	// A local repository has no remote end, so writing key material for it
+	// would put a private key on disk where it cannot be used.
+	if IsLocalRepository(r.repo.Path) {
+		return "", noop, nil
+	}
 	if r.repo.SSHKey == "" && r.repo.KnownHosts == "" {
 		return "", noop, nil
 	}

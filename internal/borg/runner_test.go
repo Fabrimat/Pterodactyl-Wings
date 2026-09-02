@@ -1,7 +1,9 @@
 package borg
 
 import (
+	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -118,6 +120,74 @@ func TestKeyMaterialGetsATrailingNewline(t *testing.T) {
 	}
 	if got := withNewline("already\n"); got != "already\n" {
 		t.Errorf("withNewline() = %q, want the input unchanged", got)
+	}
+}
+
+// posixTempRoot returns a fresh temporary directory in the POSIX-absolute
+// form cleanRoot requires, which a real path on this OS never is. The \\?\
+// prefix is Windows' own literal-path escape, so the result still resolves to
+// the real temporary directory - it just also satisfies the "wings node is
+// always Linux" shape cleanRoot checks for.
+func posixTempRoot(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	if runtime.GOOS != "windows" {
+		return dir
+	}
+	// A wings node is always Linux, so cleanRoot requires a POSIX absolute
+	// path. Windows' extended-length prefix keeps that shape while still
+	// resolving to the real temporary directory, which lets the test write
+	// through it on a native checkout.
+	return "//?/" + filepath.ToSlash(dir)
+}
+
+func TestSSHEnvironmentSkipsLocalRepositories(t *testing.T) {
+	for _, tt := range []struct {
+		name      string
+		path      string
+		wantRSH   bool
+		wantFiles bool
+	}{
+		{name: "a local path", path: "/srv/backups/repo", wantRSH: false, wantFiles: false},
+		{name: "an ssh repository", path: "ssh://borg@example.com/./repo", wantRSH: true, wantFiles: true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			root := posixTempRoot(t)
+			r := NewRunner(root, Repository{
+				Path:       tt.path,
+				SSHKey:     Secret("-----BEGIN-----\nkey\n-----END-----"),
+				KnownHosts: "example.com ssh-ed25519 AAAA",
+			})
+
+			rsh, cleanup, err := r.sshEnvironment()
+			defer cleanup()
+			if err != nil {
+				t.Fatalf("sshEnvironment() returned an error: %v", err)
+			}
+
+			if hasRSH := rsh != ""; hasRSH != tt.wantRSH {
+				t.Errorf("sshEnvironment() BORG_RSH = %q, want non-empty: %v", rsh, tt.wantRSH)
+			}
+
+			// The point of the guard is that a local repository never gets an
+			// ssh directory at all, so this checks the filesystem rather than
+			// just the returned values: a regression that still wrote the key
+			// but happened to return an empty BORG_RSH would slip past that
+			// alone.
+			sshParent := filepath.Join(root, ".borg", "ssh")
+			wroteFiles := false
+			if entries, err := os.ReadDir(sshParent); err == nil {
+				for _, e := range entries {
+					sub, err := os.ReadDir(filepath.Join(sshParent, e.Name()))
+					if err == nil && len(sub) > 0 {
+						wroteFiles = true
+					}
+				}
+			}
+			if wroteFiles != tt.wantFiles {
+				t.Errorf("sshEnvironment() wrote files under %s = %v, want %v", sshParent, wroteFiles, tt.wantFiles)
+			}
+		})
 	}
 }
 
