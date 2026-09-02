@@ -76,6 +76,9 @@ func restoreServerBackupBorg(s *server.Server, b *backup.BorgBackup, logger *log
 		logger.Info("starting restoration process for server backup using borg driver")
 		if err := s.RestoreBackup(b, nil); err != nil {
 			logger.WithField("error", err).Error("failed to restore borg backup to server")
+			s.Events().Publish(server.DaemonMessageEvent, "Server restoration from borg backup failed.")
+			s.SetRestoring(false)
+			return
 		}
 		s.Events().Publish(server.DaemonMessageEvent, "Completed server restoration from borg backup.")
 		s.Events().Publish(server.BackupRestoreCompletedEvent, "")
