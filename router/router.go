@@ -68,6 +68,17 @@ func Configure(m *wserver.Manager, client remote.Client) *gin.Engine {
 	protected.DELETE("/api/transfers/:server", deleteTransfer)
 	protected.POST("/api/deauthorize-user", postDeauthorizeUser)
 
+	// Deleting a backup whose server is gone from this node. deleteServerBackup
+	// is registered a second time here rather than being split into a handler of
+	// its own because it never looks at the server: it reads the backup UUID off
+	// the path, takes the API client and the logger from the engine-level
+	// middleware, and both of its branches - backup.LocateLocal and the borg
+	// delete - are addressed by that UUID alone. The server-scoped registration
+	// below is the one to reach for whenever the server does still exist, since
+	// ServerExists rejects a UUID for a server this node does not host before
+	// any of this runs.
+	protected.DELETE("/api/backups/:backup", deleteServerBackup)
+
 	// These are server specific routes, and require that the request be authorized, and
 	// that the server exist on the Daemon.
 	server := router.Group("/api/servers/:server")
