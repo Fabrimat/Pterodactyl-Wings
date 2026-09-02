@@ -259,7 +259,15 @@ func (b *BorgBackup) Restore(ctx context.Context, _ io.Reader, callback RestoreC
 
 			return callback(f.NameInArchive, f.FileInfo, r)
 		})
-		// Unblock borg if the extraction stopped before the stream ended.
+		// A tar stream ends with a two block end-of-archive marker and is then
+		// padded to borg's block factor. The tar reader stops right after the
+		// marker and never reads that padding, so closing the pipe as soon as
+		// extraction succeeds would leave export-tar still writing it into a
+		// read end that is already gone, failing a restore that already copied
+		// every byte correctly. DrainOnSuccess lets export-tar reach EOF on its
+		// own and exit cleanly before the pipe is closed.
+		err = borg.DrainOnSuccess(err, pr)
+		// Unblock borg if the extraction, or the drain above, ended in an error.
 		_ = pr.CloseWithError(err)
 		return err
 	})

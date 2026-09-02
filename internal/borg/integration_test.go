@@ -215,6 +215,56 @@ func TestBorgRoundTrip(t *testing.T) {
 		}
 	}
 
+	// --- export-tar consumed the way Restore consumes it -------------------
+	// The buffer above proves the content is right, but Run only returns
+	// once the buffer holds everything, so that read never exercises the
+	// actual restore shape. Restore instead pipes export-tar's stdout to a
+	// tar.Reader that stops right after the end-of-archive marker, leaving
+	// whatever borg wrote past it still unread on the pipe. That gap is
+	// exactly what reached production: a restore that copied every byte
+	// correctly and then failed because export-tar was still writing into a
+	// pipe whose read end had already closed. This drives that same shape
+	// against a real borg process rather than a stream this test built by
+	// hand, so a future export-tar whose trailing bytes take a different
+	// shape fails CI instead of a live restore.
+	pr, pw := io.Pipe()
+	runErr := make(chan error, 1)
+	go func() {
+		_, err := runner.Run(ctx, Cmd{
+			Sub:         "export-tar",
+			Common:      common,
+			Positionals: []string{target, "-"},
+			Stdout:      pw,
+		})
+		_ = pw.CloseWithError(err)
+		runErr <- err
+	}()
+
+	pipeTr := tar.NewReader(pr)
+	var readErr error
+	for {
+		if _, err := pipeTr.Next(); err != nil {
+			if err != io.EOF {
+				readErr = err
+			}
+			break
+		}
+		if _, err := io.Copy(io.Discard, pipeTr); err != nil {
+			readErr = err
+			break
+		}
+	}
+	// The fix under test: draining the rest of the pipe before closing it is
+	// what lets export-tar reach EOF on its own and exit cleanly.
+	readErr = DrainOnSuccess(readErr, pr)
+	_ = pr.CloseWithError(readErr)
+	if readErr != nil {
+		t.Fatalf("reading export-tar through a pipe: %v", readErr)
+	}
+	if err := <-runErr; err != nil {
+		t.Fatalf("export-tar via pipe: %v", err)
+	}
+
 	// --- delete -------------------------------------------------------
 	if _, err := runner.Run(ctx, Cmd{
 		Sub:         "delete",
