@@ -136,12 +136,20 @@ func (r *Runner) secrets() []Secret {
 // dir returns the path of one of borg's own directories underneath wings' root
 // and creates it if it is not there yet. Every caller goes through here so that
 // the root is checked before anything is written below it.
+//
+// Everything lives under a single hidden ".borg" parent rather than directly
+// under root. A repository base is commonly configured as a path under root
+// too, and a future reconciliation pass over that base would otherwise find a
+// "cache" and an "ssh" entry sitting alongside the server UUIDs it expects.
+// The leading dot keeps this out of that enumeration as a second layer, not
+// the only one: cleanRoot below is what actually keeps the key material this
+// writes somewhere the operator meant.
 func (r *Runner) dir(name string) (string, error) {
 	root, err := cleanRoot(r.root)
 	if err != nil {
 		return "", err
 	}
-	dir := filepath.Join(root, "borg", name)
+	dir := filepath.Join(root, ".borg", name)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return "", errors.Wrapf(err, "borg: could not create the %s directory", name)
 	}

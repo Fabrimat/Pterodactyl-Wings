@@ -8,13 +8,13 @@ import (
 
 func TestBuildEnv(t *testing.T) {
 	base := []string{"PATH=/usr/bin", "HOME=/root", "BORG_PASSPHRASE=stale", "BORG_REPO=/somewhere/else"}
-	env := buildEnv(base, Secret("hunter2"), "/var/lib/pterodactyl/borg/cache", "ssh -i /key", false)
+	env := buildEnv(base, Secret("hunter2"), "/var/lib/pterodactyl/.borg/cache", "ssh -i /key", false)
 
 	for _, want := range []string{
 		"PATH=/usr/bin",
 		"HOME=/root",
 		"BORG_PASSPHRASE=hunter2",
-		"BORG_BASE_DIR=/var/lib/pterodactyl/borg/cache",
+		"BORG_BASE_DIR=/var/lib/pterodactyl/.borg/cache",
 		"BORG_RSH=ssh -i /key",
 		// Without these borg can stop and ask a question. During import-tar its
 		// stdin is the tar stream, so a prompt would eat archive data.
@@ -53,13 +53,13 @@ func TestBuildEnvOmitsRshWhenThereIsNoSshCommand(t *testing.T) {
 }
 
 func TestSSHCommand(t *testing.T) {
-	got := sshCommand("/var/lib/pterodactyl/borg/ssh/1/id", "/var/lib/pterodactyl/borg/ssh/1/known_hosts")
+	got := sshCommand("/var/lib/pterodactyl/.borg/ssh/1/id", "/var/lib/pterodactyl/.borg/ssh/1/known_hosts")
 	for _, want := range []string{
-		"-i '/var/lib/pterodactyl/borg/ssh/1/id'",
+		"-i '/var/lib/pterodactyl/.borg/ssh/1/id'",
 		"-o BatchMode=yes",
 		"-o IdentitiesOnly=yes",
 		"-o StrictHostKeyChecking=yes",
-		"-o UserKnownHostsFile='/var/lib/pterodactyl/borg/ssh/1/known_hosts'",
+		"-o UserKnownHostsFile='/var/lib/pterodactyl/.borg/ssh/1/known_hosts'",
 	} {
 		if !strings.Contains(got, want) {
 			t.Errorf("sshCommand() = %q, want it to contain %q", got, want)
