@@ -191,7 +191,12 @@ func cleanRoot(root string) (string, error) {
 func (r *Runner) sshEnvironment() (string, func(), error) {
 	noop := func() {}
 	// A local repository has no remote end, so writing key material for it
-	// would put a private key on disk where it cannot be used.
+	// would put a private key on disk where it cannot be used. The panel
+	// already leaves the key fields empty for a local repository, which makes
+	// this look like a duplicate of the check below it - it is not. This is
+	// the only check that still holds if the panel ever sends a key it should
+	// not, and because the panel filters the case first, nothing but
+	// TestSSHEnvironmentSkipsLocalRepositories ever exercises it.
 	if IsLocalRepository(r.repo.Path) {
 		return "", noop, nil
 	}
