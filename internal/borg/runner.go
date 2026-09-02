@@ -77,7 +77,7 @@ func (r *Runner) Run(ctx context.Context, c Cmd) (*Result, error) {
 		return nil, err
 	}
 
-	baseDir, err := r.baseDir()
+	baseDir, err := r.dir("cache")
 	if err != nil {
 		return nil, err
 	}
@@ -133,12 +133,48 @@ func (r *Runner) secrets() []Secret {
 	return []Secret{r.repo.Passphrase, r.repo.SSHKey}
 }
 
-func (r *Runner) baseDir() (string, error) {
-	dir := filepath.Join(r.root, "borg", "cache")
+// dir returns the path of one of borg's own directories underneath wings' root
+// and creates it if it is not there yet. Every caller goes through here so that
+// the root is checked before anything is written below it.
+func (r *Runner) dir(name string) (string, error) {
+	root, err := cleanRoot(r.root)
+	if err != nil {
+		return "", err
+	}
+	dir := filepath.Join(root, "borg", name)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return "", errors.Wrap(err, "borg: could not create the borg base directory")
+		return "", errors.Wrapf(err, "borg: could not create the %s directory", name)
 	}
 	return dir, nil
+}
+
+// cleanRoot normalises and checks wings' root directory. Every other component
+// joined onto a path in this package is a constant, so the root is the only
+// part worth checking, and it is worth checking: an SSH private key is written
+// underneath it, and a root that is empty, relative or carrying traversal
+// elements would put key material somewhere other than where the operator
+// meant with nothing saying so.
+//
+// Absoluteness is checked against the slash form rather than with
+// filepath.IsAbs so that it means the same thing wherever this package's tests
+// run. A wings node is always Linux and root_directory is always a POSIX path.
+func cleanRoot(root string) (string, error) {
+	const fix = "set root_directory in wings' configuration to an absolute path"
+	if root == "" {
+		return "", errors.New("borg: the configured root_directory is empty; " + fix)
+	}
+	// Clean resolves a traversal away, so a ".." has to be caught in what was
+	// configured rather than in the result.
+	for _, part := range strings.Split(filepath.ToSlash(root), "/") {
+		if part == ".." {
+			return "", errors.Errorf("borg: the configured root_directory %q contains a %q element; %s", root, "..", fix)
+		}
+	}
+	cleaned := filepath.Clean(root)
+	if !strings.HasPrefix(filepath.ToSlash(cleaned), "/") {
+		return "", errors.Errorf("borg: the configured root_directory %q is not absolute; %s", root, fix)
+	}
+	return cleaned, nil
 }
 
 // sshEnvironment writes out the key material for a remote repository and
@@ -150,9 +186,9 @@ func (r *Runner) sshEnvironment() (string, func(), error) {
 		return "", noop, nil
 	}
 
-	parent := filepath.Join(r.root, "borg", "ssh")
-	if err := os.MkdirAll(parent, 0o700); err != nil {
-		return "", noop, errors.Wrap(err, "borg: could not create the ssh key directory")
+	parent, err := r.dir("ssh")
+	if err != nil {
+		return "", noop, err
 	}
 	dir, err := os.MkdirTemp(parent, "")
 	if err != nil {

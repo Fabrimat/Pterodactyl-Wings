@@ -1,6 +1,7 @@
 package borg
 
 import (
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -117,5 +118,54 @@ func TestKeyMaterialGetsATrailingNewline(t *testing.T) {
 	}
 	if got := withNewline("already\n"); got != "already\n" {
 		t.Errorf("withNewline() = %q, want the input unchanged", got)
+	}
+}
+
+func TestCleanRoot(t *testing.T) {
+	for _, tt := range []struct {
+		name string
+		root string
+		want string
+	}{
+		{name: "an absolute path", root: "/var/lib/pterodactyl", want: "/var/lib/pterodactyl"},
+		// A trailing separator is a plausible thing to write in the config
+		// file and means exactly the same directory, so it is normalised
+		// rather than rejected.
+		{name: "a trailing separator", root: "/var/lib/pterodactyl/", want: "/var/lib/pterodactyl"},
+		{name: "a doubled separator", root: "/var/lib//pterodactyl", want: "/var/lib/pterodactyl"},
+		{name: "a single dot element", root: "/var/lib/./pterodactyl", want: "/var/lib/pterodactyl"},
+		{name: "the filesystem root", root: "/", want: "/"},
+
+		// An SSH private key is written under this directory, so anything that
+		// would move it somewhere unintended fails instead.
+		{name: "empty", root: "", want: ""},
+		{name: "relative", root: "pterodactyl", want: ""},
+		{name: "explicitly relative", root: "./pterodactyl", want: ""},
+		{name: "whitespace", root: " ", want: ""},
+		{name: "traversal in the middle", root: "/var/lib/../etc", want: ""},
+		{name: "traversal at the end", root: "/var/lib/pterodactyl/..", want: ""},
+		{name: "only a traversal", root: "..", want: ""},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := cleanRoot(tt.root)
+			if tt.want == "" {
+				if err == nil {
+					t.Fatalf("cleanRoot(%q) = %q, want an error", tt.root, got)
+				}
+				// The operator has to be told which setting to go and fix.
+				if !strings.Contains(err.Error(), "root_directory") {
+					t.Errorf("cleanRoot(%q) error = %q, want it to name root_directory", tt.root, err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("cleanRoot(%q) returned an error: %v", tt.root, err)
+			}
+			// Compared as slashes so the expectations hold on any platform the
+			// package's tests run on.
+			if slashed := filepath.ToSlash(got); slashed != tt.want {
+				t.Errorf("cleanRoot(%q) = %q, want %q", tt.root, slashed, tt.want)
+			}
+		})
 	}
 }
