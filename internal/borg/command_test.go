@@ -180,6 +180,30 @@ func TestIsNotFoundError(t *testing.T) {
 	}
 }
 
+func TestIsPassphraseError(t *testing.T) {
+	// The message is borg 1.2.8's, copied from a repository initialised with
+	// one passphrase and then opened with another. A changed panel secret
+	// produces exactly this, and it has to stay distinguishable from a
+	// repository that is genuinely broken.
+	measured := "passphrase supplied in BORG_PASSPHRASE, by BORG_PASSCOMMAND or via BORG_PASSPHRASE_FD is incorrect."
+	if err := newCommandError("info", 2, []byte(measured)); !IsPassphraseError(err) {
+		t.Errorf("IsPassphraseError() = false for borg's own wrong passphrase message")
+	}
+	// The 1.2 releases before BORG_PASSPHRASE_FD existed worded it shorter.
+	older := "passphrase supplied in BORG_PASSPHRASE or by BORG_PASSCOMMAND is incorrect."
+	if err := newCommandError("info", 2, []byte(older)); !IsPassphraseError(err) {
+		t.Errorf("IsPassphraseError() = false for the older wording")
+	}
+	for _, other := range []string{
+		"A repository already exists at /srv/borg/6f2c.",
+		"/srv/borg/6f2c is not a valid repository. Check repo config.",
+	} {
+		if err := newCommandError("info", 2, []byte(other)); IsPassphraseError(err) {
+			t.Errorf("IsPassphraseError() = true for %q", other)
+		}
+	}
+}
+
 func TestIsLocalRepository(t *testing.T) {
 	for _, tt := range []struct {
 		repository string

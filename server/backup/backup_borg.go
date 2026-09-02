@@ -374,8 +374,12 @@ func (b *BorgBackup) ensureRepository(ctx context.Context) error {
 	mu.Lock()
 	defer mu.Unlock()
 
-	if b.repositoryUsable(ctx) {
+	if err := b.openRepository(ctx); err == nil {
 		return nil
+	} else if borg.IsPassphraseError(err) {
+		// Recreating the repository would "fix" this by destroying every
+		// archive in it, so it stays a failed backup until a human decides.
+		return errors.WrapIf(err, "backup: the borg repository exists but the passphrase does not open it, which is what a changed backup passphrase secret looks like from the node")
 	}
 	if borg.IsLocalRepository(b.cfg.Repository) {
 		// borg does not create the directories above the repository itself.
@@ -399,24 +403,29 @@ func (b *BorgBackup) ensureRepository(ctx context.Context) error {
 		// holding a usable repository. That reports "already exists" here and
 		// then fails every archive afterwards for no visible reason, so check
 		// again and say what is actually wrong.
-		if !b.repositoryUsable(ctx) {
+		if perr := b.openRepository(ctx); perr != nil {
+			if borg.IsPassphraseError(perr) {
+				return errors.WrapIf(perr, "backup: the borg repository exists but the passphrase does not open it, which is what a changed backup passphrase secret looks like from the node")
+			}
 			return errors.New("backup: the borg repository path exists but is not a usable borg repository")
 		}
 	}
 	return nil
 }
 
-// repositoryUsable reports whether the repository can be opened. A lock
+// openRepository reports whether the repository can be opened, returning the
+// reason it could not rather than a bare bool: "missing" and "there but not
+// opening with this passphrase" need different answers from the caller. A lock
 // timeout lands here as a plain failure, which fails the backup rather than
 // retrying forever or hanging.
-func (b *BorgBackup) repositoryUsable(ctx context.Context) bool {
+func (b *BorgBackup) openRepository(ctx context.Context) error {
 	_, err := b.runner.Run(ctx, borg.Cmd{
 		Sub:         "info",
 		Common:      b.common(),
 		Options:     []string{"--json"},
 		Positionals: []string{b.cfg.Repository},
 	})
-	return err == nil
+	return err
 }
 
 // removeIncompleteArchive gets rid of an archive that cannot be reported to the

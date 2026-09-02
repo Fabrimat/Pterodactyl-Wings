@@ -304,3 +304,61 @@ func TestBorgRoundTrip(t *testing.T) {
 		t.Errorf("compact: %v", err)
 	}
 }
+
+// TestBorgRejectsAWrongPassphrase pins the message IsPassphraseError matches.
+// The passphrase is derived from the panel's secret and never stored, so a
+// changed secret reaches the node as an intact repository that stops opening.
+// The predicate exists to say that by name instead of blaming a corrupt
+// repository, and it can only stay right if borg's real wording is checked:
+// a reworded message in a future borg would leave the predicate compiling,
+// the unit test passing against its own canned string, and the operator back
+// to reading the wrong diagnosis.
+func TestBorgRejectsAWrongPassphrase(t *testing.T) {
+	if _, err := exec.LookPath("borg"); err != nil {
+		t.Skip("borg is not installed on this machine; skipping the real borg integration test")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+
+	root := t.TempDir()
+	repoPath := filepath.Join(t.TempDir(), "repo")
+	common := CommonOptions{LockWait: 30}
+
+	created := NewRunner(root, Repository{
+		Path:       repoPath,
+		Passphrase: Secret("the passphrase the repository was created with"),
+	})
+	if _, err := created.Run(ctx, Cmd{
+		Sub:           "init",
+		Common:        common,
+		Options:       []string{"--encryption", "repokey-blake2"},
+		Positionals:   []string{repoPath},
+		NewPassphrase: true,
+	}); err != nil {
+		t.Fatalf("init: %v", err)
+	}
+
+	// A different secret derives a different passphrase for the same server.
+	rotated := NewRunner(root, Repository{
+		Path:       repoPath,
+		Passphrase: Secret("the passphrase a changed panel secret would derive"),
+	})
+	_, err := rotated.Run(ctx, Cmd{
+		Sub:         "info",
+		Common:      common,
+		Options:     []string{"--json"},
+		Positionals: []string{repoPath},
+	})
+	if err == nil {
+		t.Fatal("info with the wrong passphrase succeeded, want it rejected")
+	}
+	if !IsPassphraseError(err) {
+		t.Errorf("IsPassphraseError() = false for a real wrong passphrase: %v", err)
+	}
+	// The two are distinct diagnoses and the wrong one sends an operator
+	// looking for damage that is not there.
+	if IsNotFoundError(err) {
+		t.Errorf("IsNotFoundError() = true for a wrong passphrase: %v", err)
+	}
+}

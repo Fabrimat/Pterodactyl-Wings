@@ -175,6 +175,15 @@ func IsRepositoryExistsError(err error) bool {
 	return stderrContains(err, "already exists")
 }
 
+// IsPassphraseError reports whether err is borg refusing to open a repository
+// because the passphrase does not match the one the repository was created
+// with. The passphrase is derived from the panel's secret rather than stored,
+// so this is what a changed secret looks like from the node: an intact
+// repository that no longer opens.
+func IsPassphraseError(err error) bool {
+	return stderrContains(err, "passphrase supplied in borg_passphrase")
+}
+
 // IsNotFoundError reports whether err is borg failing because the repository or
 // the archive it was pointed at is not there. Deleting an archive that is
 // already gone is a success, the same way os.ErrNotExist is tolerated when
@@ -183,6 +192,8 @@ func IsNotFoundError(err error) bool {
 	return stderrContains(err, "does not exist", "is not a valid repository")
 }
 
+// stderrContains matches against the lower cased stderr, so every needle has
+// to be lower case itself or it silently never matches.
 func stderrContains(err error, needles ...string) bool {
 	var cerr *CommandError
 	if err == nil || !errors.As(err, &cerr) {
