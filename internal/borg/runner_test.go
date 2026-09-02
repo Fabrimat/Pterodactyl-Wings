@@ -149,6 +149,7 @@ func TestSSHEnvironmentSkipsLocalRepositories(t *testing.T) {
 		wantFiles bool
 	}{
 		{name: "a local path", path: "/srv/backups/repo", wantRSH: false, wantFiles: false},
+		{name: "a file url", path: "file:///srv/backups/repo", wantRSH: false, wantFiles: false},
 		{name: "an ssh repository", path: "ssh://borg@example.com/./repo", wantRSH: true, wantFiles: true},
 	} {
 		t.Run(tt.name, func(t *testing.T) {

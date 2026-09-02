@@ -187,6 +187,7 @@ func TestIsLocalRepository(t *testing.T) {
 	}{
 		{repository: "/srv/borg/6f2c", want: true},
 		{repository: "./relative/repo", want: true},
+		{repository: "file:///srv/borg/6f2c", want: true},
 		{repository: "ssh://borg@backup.example.com:22/./pterodactyl/6f2c", want: false},
 		{repository: "borg@backup.example.com:pterodactyl/6f2c", want: false},
 		{repository: "", want: true},

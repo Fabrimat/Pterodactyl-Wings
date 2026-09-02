@@ -198,9 +198,12 @@ func stderrContains(err error, needles ...string) bool {
 }
 
 // IsLocalRepository reports whether the repository is a path on this node.
-// Borg treats a location with a URL scheme or an scp style host prefix as
-// remote and everything else as a local path.
+// Borg reads a bare path and a file:// URL from the local filesystem, and
+// reaches an ssh:// URL or an scp style host prefix over the network.
 func IsLocalRepository(repository string) bool {
+	if strings.HasPrefix(repository, "file://") {
+		return true
+	}
 	if strings.Contains(repository, "://") {
 		return false
 	}
