@@ -191,12 +191,17 @@ func cleanRoot(root string) (string, error) {
 func (r *Runner) sshEnvironment() (string, func(), error) {
 	noop := func() {}
 	// A local repository has no remote end, so writing key material for it
-	// would put a private key on disk where it cannot be used. The panel
-	// already leaves the key fields empty for a local repository, which makes
-	// this look like a duplicate of the check below it - it is not. This is
-	// the only check that still holds if the panel ever sends a key it should
-	// not, and because the panel filters the case first, nothing but
-	// TestSSHEnvironmentSkipsLocalRepositories ever exercises it.
+	// would put a private key on disk where it cannot be used.
+	//
+	// This looks like a duplicate of the check below it and is not. Whether it
+	// ever fires depends on the panel this node is talking to: a panel that
+	// leaves the key fields empty for a local repository reaches the check
+	// below first and this one never runs, while a panel that sends the key
+	// for every repository regardless of its scheme is stopped here, on every
+	// local backup. Both panels exist, so neither check can be removed on the
+	// evidence of the other, and TestSSHEnvironmentSkipsLocalRepositories is
+	// what holds this one in place when the panel in front of it happens to
+	// make it look unreachable.
 	if IsLocalRepository(r.repo.Path) {
 		return "", noop, nil
 	}
