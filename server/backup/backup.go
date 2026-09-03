@@ -17,6 +17,7 @@ import (
 	"golang.org/x/sync/errgroup"
 
 	"github.com/pterodactyl/wings/config"
+	"github.com/pterodactyl/wings/internal/progress"
 	"github.com/pterodactyl/wings/remote"
 	"github.com/pterodactyl/wings/server/filesystem"
 )
@@ -42,6 +43,10 @@ type RestoreCallback func(file string, info fs.FileInfo, r io.ReadCloser) error
 type BackupInterface interface {
 	// SetClient sets the API request client on the backup interface.
 	SetClient(remote.Client)
+	// SetProgress attaches the tracker that the archive writer counts bytes
+	// into. It is set before Generate runs so a caller can report on a backup
+	// that is still being written.
+	SetProgress(*progress.Progress)
 	// Identifier returns the UUID of this backup as tracked by the panel
 	// instance.
 	Identifier() string
@@ -83,10 +88,19 @@ type Backup struct {
 	client     remote.Client
 	adapter    AdapterType
 	logContext map[string]interface{}
+	progress   *progress.Progress
 }
 
 func (b *Backup) SetClient(c remote.Client) {
 	b.client = c
+}
+
+// SetProgress attaches the tracker that the archive writer counts bytes into.
+// Every adapter builds its archive through filesystem.Archive, so keeping this
+// on the embedded type is what gives all of them the same reporting instead of
+// each one growing a copy of it.
+func (b *Backup) SetProgress(p *progress.Progress) {
+	b.progress = p
 }
 
 func (b *Backup) Identifier() string {

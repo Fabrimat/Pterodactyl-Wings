@@ -67,7 +67,14 @@ func (s *Server) Backup(b backup.BackupInterface) error {
 		}
 	}
 
+	// Report how far the archive has got while it is being written, and stop
+	// again before the completion event goes out below so that nothing about
+	// this backup reaches a client after it has been told the backup is over.
+	// The stop has to run on the failure path as well, which is why it sits
+	// here rather than after the error handling.
+	stop := s.trackBackupProgress(b, s.Filesystem().CachedUsage())
 	ad, err := b.Generate(s.Context(), s.Filesystem(), ignored)
+	stop()
 	if err != nil {
 		if err := s.notifyPanelOfBackup(b.Identifier(), &backup.ArchiveDetails{}, false); err != nil {
 			s.Log().WithFields(log.Fields{

@@ -178,7 +178,7 @@ func (b *BorgBackup) Generate(ctx context.Context, fsys *filesystem.Filesystem, 
 		// The stream is an uncompressed tar on purpose. Borg chunks and
 		// compresses it itself, and chunking gzip output instead would give up
 		// the deduplication that is the whole reason to use this adapter.
-		err := (&filesystem.Archive{Filesystem: fsys, Ignore: ignore}).StreamTar(gctx, pw)
+		err := (&filesystem.Archive{Filesystem: fsys, Ignore: ignore, Progress: b.progress}).StreamTar(gctx, pw)
 		// The tar writer closes cleanly even after a failed walk, so borg can
 		// read a well formed short archive and exit 0 without noticing anything
 		// is wrong. Returning the error is what keeps a truncated archive out of
