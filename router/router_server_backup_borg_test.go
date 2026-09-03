@@ -1,7 +1,11 @@
 package router
 
 import (
+	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -197,5 +201,128 @@ func TestRestoreServerBackupBorgDoesNotPublishCompletionOnFailure(t *testing.T) 
 	}
 	if !sawFailureMessage {
 		t.Fatal("expected a failed borg restore to publish a daemon message stating the failure")
+	}
+}
+
+// borgDownloadStub stands in for the borg adapter on the download path. The
+// real one needs a borg binary and a populated repository behind it, neither
+// of which a unit test has, and the behaviour under test here is the order the
+// router does things in rather than anything borg does.
+type borgDownloadStub struct {
+	exists    bool
+	existsErr error
+	exported  bool
+}
+
+func (s *borgDownloadStub) ArchiveExists(context.Context) (bool, error) {
+	return s.exists, s.existsErr
+}
+
+func (s *borgDownloadStub) ExportTar(_ context.Context, w io.Writer) error {
+	s.exported = true
+	_, err := w.Write([]byte("tar"))
+	return err
+}
+
+func newBorgDownloadContext(t *testing.T) (*gin.Context, *httptest.ResponseRecorder) {
+	t.Helper()
+
+	gin.SetMode(gin.TestMode)
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest(http.MethodGet, "/download/backup", nil)
+	c.Set("logger", log.WithField("test", t.Name()))
+	return c, w
+}
+
+// TestStreamBorgBackupDownloadRejectsMissingArchive covers the ordering that
+// makes a failed download reportable at all. Borg writes nothing when the
+// archive is not there, so a check made after the attachment headers went out
+// leaves the client holding a 200 and an empty tar that looks exactly like a
+// backup of an empty server.
+func TestStreamBorgBackupDownloadRejectsMissingArchive(t *testing.T) {
+	backupID := "11111111-1111-1111-1111-111111111111"
+	c, w := newBorgDownloadContext(t)
+
+	b := &borgDownloadStub{}
+	streamBorgBackupDownload(c, b, backupID)
+
+	if c.Writer.Status() != http.StatusNotFound {
+		t.Fatalf("expected status %d for a backup that is not in the repository, got %d", http.StatusNotFound, c.Writer.Status())
+	}
+	if b.exported {
+		t.Fatal("expected the export not to run for a backup that is not in the repository")
+	}
+	if v := w.Header().Get("Content-Disposition"); v != "" {
+		t.Fatalf("expected no attachment header on a rejected download, got %q", v)
+	}
+	if v := w.Header().Get("Content-Type"); strings.Contains(v, "x-tar") {
+		t.Fatalf("expected no tar content type on a rejected download, got %q", v)
+	}
+	var body struct {
+		Error string `json:"error"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatalf("expected a JSON error body, got %q: %v", w.Body.String(), err)
+	}
+	if body.Error == "" {
+		t.Fatalf("expected the JSON error body to carry a message, got %q", w.Body.String())
+	}
+}
+
+// TestStreamBorgBackupDownloadReportsAnUnreadableRepository separates the two
+// failures the check can run into. A repository that cannot be reached or
+// unlocked is not an archive that is gone, and answering 404 to it would tell
+// the panel to drop a backup that is still sitting in the repository. The
+// status itself is left to the CaptureErrors middleware, so what is asserted
+// here is that the error was handed to it rather than turned into a 404.
+func TestStreamBorgBackupDownloadReportsAnUnreadableRepository(t *testing.T) {
+	backupID := "11111111-1111-1111-1111-111111111111"
+	c, w := newBorgDownloadContext(t)
+
+	b := &borgDownloadStub{existsErr: errors.New("borg: could not open the repository")}
+	streamBorgBackupDownload(c, b, backupID)
+
+	if !c.IsAborted() {
+		t.Fatal("expected an unreadable repository to abort the request")
+	}
+	if len(c.Errors) == 0 {
+		t.Fatal("expected an unreadable repository to be reported through the error middleware rather than swallowed")
+	}
+	if c.Writer.Status() == http.StatusNotFound {
+		t.Fatal("expected an unreadable repository not to be reported as a missing backup")
+	}
+	if b.exported {
+		t.Fatal("expected the export not to run when the repository could not be read")
+	}
+	if v := w.Header().Get("Content-Disposition"); v != "" {
+		t.Fatalf("expected no attachment header on a rejected download, got %q", v)
+	}
+	if w.Body.Len() != 0 {
+		t.Fatalf("expected no body to be written for an unreadable repository, got %q", w.Body.String())
+	}
+}
+
+// TestStreamBorgBackupDownloadStreamsAnExistingArchive is the other half of
+// the guard above: the new check must not stand in the way of a download that
+// was always going to work.
+func TestStreamBorgBackupDownloadStreamsAnExistingArchive(t *testing.T) {
+	backupID := "11111111-1111-1111-1111-111111111111"
+	c, w := newBorgDownloadContext(t)
+
+	b := &borgDownloadStub{exists: true}
+	streamBorgBackupDownload(c, b, backupID)
+
+	if c.Writer.Status() != http.StatusOK {
+		t.Fatalf("expected status %d for an archive that is in the repository, got %d body %s", http.StatusOK, c.Writer.Status(), w.Body.String())
+	}
+	if !b.exported {
+		t.Fatal("expected the export to run for an archive that is in the repository")
+	}
+	if v := w.Header().Get("Content-Disposition"); !strings.Contains(v, backupID+".tar") {
+		t.Fatalf("expected the attachment header to name the backup, got %q", v)
+	}
+	if w.Body.String() != "tar" {
+		t.Fatalf("expected the exported archive to reach the client, got %q", w.Body.String())
 	}
 }

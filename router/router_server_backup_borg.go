@@ -3,6 +3,7 @@ package router
 import (
 	"context"
 	stderrors "errors"
+	"io"
 	"net/http"
 	"strconv"
 	"time"
@@ -117,6 +118,16 @@ func deleteServerBackupBorg(c *gin.Context, client remote.Client, uuid string, c
 	}(b, uuid, logger)
 }
 
+// borgArchiveSource is the part of the borg adapter that the download path
+// uses. The adapter is its only implementation; it is an interface so the
+// ordering the download depends on - the archive is confirmed before a single
+// header is written - can be covered without a borg binary and a populated
+// repository on the machine running the tests.
+type borgArchiveSource interface {
+	ArchiveExists(ctx context.Context) (bool, error)
+	ExportTar(ctx context.Context, w io.Writer) error
+}
+
 // getDownloadBackupBorg runs the borg fallback of getDownloadBackup. It is
 // only reached once backup.LocateLocal has already reported that no local
 // file exists for this backup, since S3 downloads never reach this endpoint
@@ -137,15 +148,43 @@ func getDownloadBackupBorg(c *gin.Context, client remote.Client, uuid string) {
 		return
 	}
 
-	b := backup.NewBorg(client, uuid, "", cfg)
+	streamBorgBackupDownload(c, backup.NewBorg(client, uuid, "", cfg), uuid)
+}
+
+// streamBorgBackupDownload writes a borg archive out to the client, confirming
+// that it is actually in the repository before it commits to a response.
+//
+// That confirmation has to come first. Borg exits non-zero having written
+// nothing when the archive is not there - a backup that is still running, one
+// that failed, or one removed out of band - and once the attachment headers
+// have gone out the 200 is already committed, so the caller is handed an empty
+// tar that is indistinguishable from a backup with nothing in it.
+func streamBorgBackupDownload(c *gin.Context, b borgArchiveSource, uuid string) {
+	exists, err := b.ArchiveExists(c.Request.Context())
+	if err != nil {
+		// A repository that cannot be reached, unlocked or read is not the same
+		// thing as an archive that is not in it, and answering 404 to it would
+		// tell the panel a backup is gone while it is still sitting there.
+		middleware.CaptureAndAbort(c, err)
+		return
+	}
+	if !exists {
+		c.AbortWithStatusJSON(http.StatusNotFound, gin.H{
+			"error": "The requested backup was not found on this server.",
+		})
+		return
+	}
+
 	c.Header("Content-Type", "application/x-tar")
 	c.Header("Content-Disposition", "attachment; filename="+strconv.Quote(uuid+".tar"))
 	// The archive's size is not known ahead of the stream, so there is no
 	// Content-Length to set here; the response is chunked instead.
 	if err := b.ExportTar(c.Request.Context(), c.Writer); err != nil {
-		// The status line goes out the moment the first byte does, which by this
-		// point has almost certainly already happened, so there is no response
-		// left to turn into an error. Logging it is all that is left to do.
+		// With the archive already confirmed this is the residual case rather
+		// than the common one: an export that fails part way through a stream
+		// that was flowing. The status line went out with the first byte, so
+		// there is no response left to turn into an error and logging it is all
+		// that is left to do.
 		middleware.ExtractLogger(c).WithField("backup", uuid).WithField("error", err).Error("failed to stream borg backup download to client")
 	}
 }
