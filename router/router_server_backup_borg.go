@@ -156,9 +156,10 @@ func getDownloadBackupBorg(c *gin.Context, client remote.Client, uuid string) {
 //
 // That confirmation has to come first. Borg exits non-zero having written
 // nothing when the archive is not there - a backup that is still running, one
-// that failed, or one removed out of band - and once the attachment headers
-// have gone out the 200 is already committed, so the caller is handed an empty
-// tar that is indistinguishable from a backup with nothing in it.
+// that failed, or one removed out of band - and a handler that has declared a
+// tar attachment and then has nothing left to say is finished off as a 200
+// with an empty body, which the caller cannot tell apart from a backup of a
+// server with nothing on it.
 func streamBorgBackupDownload(c *gin.Context, b borgArchiveSource, uuid string) {
 	exists, err := b.ArchiveExists(c.Request.Context())
 	if err != nil {
@@ -180,11 +181,30 @@ func streamBorgBackupDownload(c *gin.Context, b borgArchiveSource, uuid string) 
 	// The archive's size is not known ahead of the stream, so there is no
 	// Content-Length to set here; the response is chunked instead.
 	if err := b.ExportTar(c.Request.Context(), c.Writer); err != nil {
-		// With the archive already confirmed this is the residual case rather
-		// than the common one: an export that fails part way through a stream
-		// that was flowing. The status line went out with the first byte, so
-		// there is no response left to turn into an error and logging it is all
-		// that is left to do.
+		// Setting those two headers committed nothing: gin writes the status
+		// line on the first write and not before, so what is still possible
+		// here is decided by whether any of the archive got out, not by how
+		// far along the handler is.
+		//
+		// Confirming the archive above does not close off a failure that
+		// produces no bytes at all. ArchiveExists takes a shared lock on the
+		// repository and a borg create takes an exclusive one, so a backup
+		// starting in the window between the two makes the export block and
+		// then give up on lock_wait with nothing written, on a repository that
+		// is reachable and an archive that is there.
+		if !c.Writer.Written() {
+			// The headers are still sitting in the map, and gin only fills in
+			// a Content-Type that is absent, so an error rendered over the top
+			// of these would reach the browser as a tar attachment and be
+			// saved as a .tar holding a JSON error.
+			c.Header("Content-Type", "")
+			c.Header("Content-Disposition", "")
+			middleware.CaptureAndAbort(c, err)
+			return
+		}
+		// Past the first byte the status line has already gone, so there is no
+		// response left to turn into an error and logging it is all that is
+		// left to do.
 		middleware.ExtractLogger(c).WithField("backup", uuid).WithField("error", err).Error("failed to stream borg backup download to client")
 	}
 }

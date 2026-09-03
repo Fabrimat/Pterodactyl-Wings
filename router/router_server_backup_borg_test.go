@@ -211,6 +211,7 @@ func TestRestoreServerBackupBorgDoesNotPublishCompletionOnFailure(t *testing.T) 
 type borgDownloadStub struct {
 	exists    bool
 	existsErr error
+	exportErr error
 	exported  bool
 }
 
@@ -220,6 +221,11 @@ func (s *borgDownloadStub) ArchiveExists(context.Context) (bool, error) {
 
 func (s *borgDownloadStub) ExportTar(_ context.Context, w io.Writer) error {
 	s.exported = true
+	if s.exportErr != nil {
+		// Borg produces nothing at all when it gives up before the first byte,
+		// so this writes nothing either: that is the case being reproduced.
+		return s.exportErr
+	}
 	_, err := w.Write([]byte("tar"))
 	return err
 }
@@ -324,5 +330,45 @@ func TestStreamBorgBackupDownloadStreamsAnExistingArchive(t *testing.T) {
 	}
 	if w.Body.String() != "tar" {
 		t.Fatalf("expected the exported archive to reach the client, got %q", w.Body.String())
+	}
+}
+
+// TestStreamBorgBackupDownloadReportsAnExportThatWroteNothing covers what the
+// existence check on its own does not. Borg can pass that check and still fail
+// before the first byte, waiting out lock_wait behind a backup that started in
+// the window between the two, and gin commits the status line on the first
+// write rather than when the headers are set - so this is still answerable
+// with a real error instead of a 200 and an empty tar.
+//
+// The two tar headers are asserted gone because gin only fills in a
+// Content-Type that is absent: leaving them would send the JSON error out as
+// an attachment the browser saves as a .tar.
+func TestStreamBorgBackupDownloadReportsAnExportThatWroteNothing(t *testing.T) {
+	backupID := "11111111-1111-1111-1111-111111111111"
+	c, w := newBorgDownloadContext(t)
+
+	b := &borgDownloadStub{exists: true, exportErr: errors.New("borg: failed to acquire the lock")}
+	streamBorgBackupDownload(c, b, backupID)
+
+	if !b.exported {
+		t.Fatal("expected the export to have been attempted for an archive that is in the repository")
+	}
+	if c.Writer.Written() {
+		t.Fatal("expected nothing to have been committed by an export that wrote no bytes")
+	}
+	if !c.IsAborted() {
+		t.Fatal("expected an export that wrote nothing to abort the request")
+	}
+	if len(c.Errors) == 0 {
+		t.Fatal("expected an export that wrote nothing to be reported through the error middleware rather than logged and finished as a 200")
+	}
+	if v := w.Header().Get("Content-Disposition"); v != "" {
+		t.Fatalf("expected the attachment header to be cleared before aborting, got %q", v)
+	}
+	if v := w.Header().Get("Content-Type"); v != "" {
+		t.Fatalf("expected the tar content type to be cleared before aborting, got %q", v)
+	}
+	if w.Body.Len() != 0 {
+		t.Fatalf("expected no body from an export that wrote nothing, got %q", w.Body.String())
 	}
 }
