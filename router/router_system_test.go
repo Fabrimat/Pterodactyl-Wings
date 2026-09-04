@@ -1,6 +1,7 @@
 package router
 
 import (
+	"encoding/json"
 	"net/http/httptest"
 	"path/filepath"
 	"strings"
@@ -10,6 +11,7 @@ import (
 
 	"github.com/pterodactyl/wings/config"
 	"github.com/pterodactyl/wings/server"
+	"github.com/pterodactyl/wings/system"
 )
 
 func TestPostUpdateConfigurationRotatesCredentials(t *testing.T) {
@@ -52,4 +54,57 @@ func TestPostUpdateConfigurationRotatesCredentials(t *testing.T) {
 	default:
 		t.Fatal("expected client credentials to be rotated")
 	}
+}
+
+func assertHasFeatures(t *testing.T, body []byte) {
+	t.Helper()
+
+	var decoded struct {
+		Features []string `json:"features"`
+	}
+	if err := json.Unmarshal(body, &decoded); err != nil {
+		t.Fatalf("failed to decode response body: %v", err)
+	}
+
+	for _, want := range system.Features {
+		found := false
+		for _, got := range decoded.Features {
+			if got == want {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("expected features %v to contain %q, response was %s", decoded.Features, want, body)
+		}
+	}
+}
+
+// The Panel calls this endpoint with no query string, so this is the shape
+// it actually receives.
+func TestGetSystemInformationTrimmedResponseIncludesFeatures(t *testing.T) {
+	info := &system.Information{
+		Version:  "test",
+		Features: system.Features,
+	}
+
+	body, err := json.Marshal(newTrimmedSystemInformation(info))
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertHasFeatures(t, body)
+}
+
+// The full shape returned by ?v=2 must carry the same features array.
+func TestGetSystemInformationFullResponseIncludesFeatures(t *testing.T) {
+	info := &system.Information{
+		Version:  "test",
+		Features: system.Features,
+	}
+
+	body, err := json.Marshal(info)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertHasFeatures(t, body)
 }
