@@ -96,9 +96,7 @@ func getDownloadFile(c *gin.Context) {
 	}
 	defer f.Close()
 	if st.IsDir() {
-		c.AbortWithStatusJSON(http.StatusNotFound, gin.H{
-			"error": "The requested resource was not found on this server.",
-		})
+		streamDirectoryDownload(c, s, token.FilePath, st)
 		return
 	}
 
