@@ -35,6 +35,96 @@ I would like to extend my sincere thanks to the following sponsors for helping f
 * [Community Guides](https://pterodactyl.io/community/about.html)
 * Or, get additional help [via Discord](https://discord.gg/pterodactyl)
 
+## Installing this fork
+
+This fork publishes no GitHub releases, so there is no prebuilt binary to
+download. Build it from source and install the binary in place of stock
+Wings.
+
+### Get the source
+
+```bash
+git clone https://github.com/Fabrimat/Pterodactyl-Wings.git
+cd Pterodactyl-Wings
+```
+
+### Node dependencies this fork adds
+
+Docker is already required by upstream Wings. On top of that, the borg
+backup adapter needs:
+
+* borg, version 1.2 or newer but older than 2.0 (floor: `import-tar` and
+  `--upload-ratelimit`; ceiling: 2.0 renamed `init` to `repo-create` and
+  changed the encryption mode names). Wings resolves `borg` from `PATH` and
+  fails with an explicit error if it is missing.
+* An ssh client, because remote repositories run over `BORG_RSH` with
+  `StrictHostKeyChecking=yes` and `BatchMode=yes`.
+
+On Debian/Ubuntu:
+
+```bash
+apt install borgbackup openssh-client
+```
+
+If the repository lives on a separate host, that host needs borg installed
+too. See "Preparing an ssh:// repository host" in the Panel's
+[`BACKUPS.md`](https://github.com/Fabrimat/Pterodactyl-Panel/blob/1.0-develop/BACKUPS.md#preparing-an-ssh-repository-host)
+for setting up the `borg` user, the forced command and the ssh key.
+
+### Build
+
+With Go 1.24 installed on the machine doing the build:
+
+```bash
+make build
+```
+
+This produces `build/wings_linux_amd64` and `build/wings_linux_arm64`.
+
+Without Go on the host, which is the usual case on a node, build in a
+container instead:
+
+```bash
+docker run --rm -v "$(pwd)":/src -v wings-gomod:/go/pkg/mod -w /src \
+  -e GOOS=linux -e GOARCH=amd64 -e CGO_ENABLED=0 golang:1.24 \
+  go build -buildvcs=false -trimpath \
+  -ldflags='-s -w -X github.com/pterodactyl/wings/system.Version=borg-<short sha>' \
+  -o build/wings_linux_amd64 github.com/pterodactyl/wings
+```
+
+`-buildvcs=false` is required because the container runs as root over a
+checkout owned by another user; without it the build fails with "detected
+dubious ownership in repository at '/src'". The version string must not
+start with `v`: the `wings version` command prepends one itself, so a
+version starting with `v` prints as `wings vvborg-<short sha>`.
+
+### Install the binary and restart
+
+Keep the current binary around for rollback, then replace it:
+
+```bash
+cp /usr/local/bin/wings /usr/local/bin/wings.bak
+install -m 0755 -o root -g root build/wings_linux_amd64 /usr/local/bin/wings
+systemctl restart wings
+```
+
+The systemd unit and `config.yml` are unchanged by this fork; see upstream's
+[Wings Documentation](https://pterodactyl.io/wings/1.0/installing.html) for
+those.
+
+### Verify
+
+```bash
+wings version
+```
+
+This prints the version prefixed with `v`, for example
+`wings vborg-<short sha>`.
+
+Upgrade Wings on every node before upgrading the Panel: this fork's Panel
+checks the `features` array Wings reports on `GET /api/system` and refuses
+borg operations against a node whose daemon does not advertise them.
+
 ## Reporting Issues
 
 Please use the [pterodactyl/panel](https://github.com/pterodactyl/panel) repository to report any issues or make
