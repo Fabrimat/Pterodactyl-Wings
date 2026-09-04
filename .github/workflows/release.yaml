@@ -21,10 +21,14 @@ jobs:
       - name: Build release binaries
         env:
           CGO_ENABLED: 0
+          # Stamped without the tag's leading v, because the version command
+          # prints "wings v%s" and prepends one of its own: stamping the tag
+          # verbatim ships a binary that reports itself as "wings vv1.2.3".
+          VERSION: ${{ github.ref_name }}
         run: |
-          GOARCH=amd64 go build -o dist/wings_linux_amd64 -v -trimpath -ldflags="-s -w -X github.com/pterodactyl/wings/system.Version=${{ github.ref_name }}" github.com/pterodactyl/wings
+          GOARCH=amd64 go build -o dist/wings_linux_amd64 -v -trimpath -ldflags="-s -w -X github.com/pterodactyl/wings/system.Version=${VERSION#v}" github.com/pterodactyl/wings
           chmod 755 dist/wings_linux_amd64
-          GOARCH=arm64 go build -o dist/wings_linux_arm64 -v -trimpath -ldflags="-s -w -X github.com/pterodactyl/wings/system.Version=${{ github.ref_name }}" github.com/pterodactyl/wings
+          GOARCH=arm64 go build -o dist/wings_linux_arm64 -v -trimpath -ldflags="-s -w -X github.com/pterodactyl/wings/system.Version=${VERSION#v}" github.com/pterodactyl/wings
           chmod 755 dist/wings_linux_arm64
 
       - name: Create release branch
@@ -60,8 +64,13 @@ jobs:
       # version off the API itself, because the release above is still a draft.
       # GITHUB_TOKEN deliberately cannot be used here: it has no access to
       # another repository.
+      #
+      # Restricted to the upstream repository as well. A fork's tag is not a
+      # Pterodactyl release and must not be announced as the latest one, and a
+      # fork has no CDN_DISPATCH_TOKEN to announce it with, so without this the
+      # step fails every release a fork ever tags.
       - name: Update CDN release manifest
-        if: ${{ !contains(github.ref_name, 'rc') && !contains(github.ref_name, 'beta') && !contains(github.ref_name, 'alpha') }}
+        if: ${{ github.repository == 'pterodactyl/wings' && !contains(github.ref_name, 'rc') && !contains(github.ref_name, 'beta') && !contains(github.ref_name, 'alpha') }}
         env:
           GH_TOKEN: ${{ secrets.CDN_DISPATCH_TOKEN }}
           VERSION: ${{ github.ref_name }}

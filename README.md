@@ -37,9 +37,21 @@ I would like to extend my sincere thanks to the following sponsors for helping f
 
 ## Installing this fork
 
-This fork publishes no GitHub releases, so there is no prebuilt binary to
-download. Build it from source and install the binary in place of stock
-Wings.
+Each release of this fork carries a prebuilt binary for linux/amd64 and
+linux/arm64, which is the quickest way to install it in place of stock Wings:
+
+```bash
+curl -fL -o /tmp/wings_linux_amd64 \
+  https://github.com/Fabrimat/Pterodactyl-Wings/releases/latest/download/wings_linux_amd64
+```
+
+Use `wings_linux_arm64` on arm64, then install the downloaded file with the
+steps under [Install the binary and restart](#install-the-binary-and-restart).
+A container image is published for every push to `develop` as well, as
+`ghcr.io/Fabrimat/Pterodactyl-Wings:develop`.
+
+Building from source is the alternative, and is what the rest of this section
+covers.
 
 ### Get the source
 
