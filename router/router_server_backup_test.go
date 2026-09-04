@@ -34,6 +34,10 @@ func (c backupTestRemoteClient) GetBackupRemoteUploadURLs(context.Context, strin
 	return remote.BackupRemoteUploadResponse{}, nil
 }
 
+func (c backupTestRemoteClient) GetBackupBorgConfiguration(context.Context, string) (*remote.BorgConfiguration, error) {
+	return nil, nil
+}
+
 func (c backupTestRemoteClient) GetInstallationScript(context.Context, string) (remote.InstallationScript, error) {
 	return remote.InstallationScript{}, nil
 }

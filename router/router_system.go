@@ -30,19 +30,31 @@ func getSystemInformation(c *gin.Context) {
 		return
 	}
 
-	c.JSON(http.StatusOK, struct {
-		Architecture  string `json:"architecture"`
-		CPUCount      int    `json:"cpu_count"`
-		KernelVersion string `json:"kernel_version"`
-		OS            string `json:"os"`
-		Version       string `json:"version"`
-	}{
+	c.JSON(http.StatusOK, newTrimmedSystemInformation(i))
+}
+
+// The trimmed response returned when the Panel calls this endpoint without
+// ?v=2, which is how it actually calls it. Features must be present here,
+// not just on the ?v=2 payload, or fork-gated functionality silently
+// disappears for the Panel.
+type trimmedSystemInformation struct {
+	Architecture  string   `json:"architecture"`
+	CPUCount      int      `json:"cpu_count"`
+	KernelVersion string   `json:"kernel_version"`
+	OS            string   `json:"os"`
+	Version       string   `json:"version"`
+	Features      []string `json:"features"`
+}
+
+func newTrimmedSystemInformation(i *system.Information) trimmedSystemInformation {
+	return trimmedSystemInformation{
 		Architecture:  i.System.Architecture,
 		CPUCount:      i.System.CPUThreads,
 		KernelVersion: i.System.KernelVersion,
 		OS:            i.System.OSType,
 		Version:       i.Version,
-	})
+		Features:      i.Features,
+	}
 }
 
 // Returns all the servers that are registered and configured correctly on

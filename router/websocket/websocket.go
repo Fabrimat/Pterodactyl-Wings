@@ -38,6 +38,12 @@ const (
 	PermissionReceiveBackups   = "backup.read"
 )
 
+// backupEventPrefix is the namespace every event this daemon publishes about a
+// backup is named under. The permission gate in SendJson matches on it instead
+// of on a list of event names, so that a backup event added later cannot reach
+// a user without backup.read just because nobody thought to extend the list.
+const backupEventPrefix = "backup "
+
 type Handler struct {
 	sync.RWMutex `json:"-"`
 	Connection   *websocket.Conn `json:"-"`
@@ -154,8 +160,18 @@ func (h *Handler) SendJson(v Message) error {
 		}
 
 		// If the user does not have permission to see backup events, do not emit
-		// them over the socket.
-		if strings.HasPrefix(string(v.Event), server.BackupCompletedEvent) {
+		// them over the socket. The whole namespace is matched rather than one
+		// event name, so an event added to it later is gated on the day it is
+		// added instead of the day somebody notices it was not.
+		//
+		// The restore completion event is deliberately left outside the gate.
+		// It is published with an empty payload, so it names no backup and
+		// discloses nothing, and it is the only thing that tells the panel the
+		// server has come back out of its restoring state. Gating it would
+		// leave a console or files subuser, neither of whom carries
+		// backup.read, stranded on the restoring screen until they reload the
+		// page, hiding a server state change they have every right to see.
+		if strings.HasPrefix(string(v.Event), backupEventPrefix) && string(v.Event) != server.BackupRestoreCompletedEvent {
 			if !j.HasPermission(PermissionReceiveBackups) {
 				return nil
 			}
